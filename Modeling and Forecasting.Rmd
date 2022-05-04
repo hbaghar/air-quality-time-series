@@ -72,10 +72,20 @@ test <- tail(data, 52)
 
 fit <- train |> model(arima308111 = ARIMA(AQI ~ 1 +pdq(3,0,8) + PDQ(1,1,1)))
 glance(fit)
+```
 
+```{r}
+fit |> gg_tsresiduals(lag = 52)
+```
+
+```{r}
 fit |>
   forecast(h=52) |>
   autoplot(train)+
   geom_line(data = test, aes(x=Date, y=AQI), color = "red", alpha=0.5)
+```
+
+```{r}
+fit |> forecast(h=52) |> accuracy(head(test, 52))
 ```
 
