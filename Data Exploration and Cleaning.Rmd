@@ -1,0 +1,82 @@
+---
+title: "Data Exploration and Cleaning"
+output: github_document
+---
+
+```{r, setup, message=FALSE}
+library(fpp3)
+```
+
+# Loading dataset
+
+```{r}
+data <- read.csv("data/city_day_raw.csv") |>
+   select(c(City,Date,AQI)) |>
+   mutate(Date = as.Date(Date, format="%Y-%m-%d")) |>
+   filter(City %in% c("Bengaluru", "Chennai", "Delhi", "Hyderabad", "Lucknow"))
+```
+
+# EDA
+
+```{r}
+ggplot(data = data, aes(x=Date, y=AQI, color=City)) +
+         geom_line()+
+         facet_grid(City ~.)
+```
+Observations:
+
+- Series have missing values in the start (remove?)
+- Some series also have missing values in between (imputation?)
+- Data is noisy (roll-up to week from day?)
+
+## Analyzing missing values
+
+```{r}
+data |>
+  group_by(City) |>
+  summarise(missing.percent = sum(is.na(AQI))/n()*100)
+```
+
+Most of the missing values are likely due to the long runs of NAs in the beginning for each city. We can fill the NAs in between with the previous value and filter out the starting runs of NAs.
+
+First, let us fill "downwards" i.e. only for dates which have data on the previous day. This will fill the previous day's value in the missing field.
+
+```{r}
+data |>
+  group_by(City) |>
+  fill(AQI, .direction = "down") |>
+  summarise(missing.percent = sum(is.na(AQI))/n()*100)
+```
+
+We now see that most of the missing data is only from the long runs of NA in the start. We can safely filter those records out. 
+
+
+We clean the missing values in the following manner:
+
+- Convert Date from daily level to weekly level
+- Group data by City
+- Fill missing values downwards
+- Remove remaining missing values at the start
+- Group data by City and Date (now weekly)
+- Roll up AQI to weekly level
+
+```{r}
+(data <- data |>
+  mutate(Date = yearweek(Date)) |>
+  group_by(City) |>
+  fill(AQI, .direction = "down") |>
+  filter(!is.na(AQI)) |>
+  group_by(City, Date) |>
+  summarise(AQI = mean(AQI)))
+```
+
+```{r}
+ggplot(data = data, aes(x=Date, y=AQI, color=City)) +
+         geom_line()+
+         facet_grid(City ~.)
+```
+
+Exporting data
+```{r}
+write.csv(x = data, file = "data/city_week_cleaned.csv", row.names = FALSE)
+```
