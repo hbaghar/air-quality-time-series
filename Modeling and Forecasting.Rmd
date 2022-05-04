@@ -1,0 +1,81 @@
+---
+title: "Modeling and Forecasting"
+output: github_document
+---
+
+```{r, setup, message=FALSE}
+library(fpp3)
+```
+
+# Load data
+
+```{r}
+(data <- read.csv("data/city_week_cleaned.csv") |>
+  filter(City == "Delhi") |>
+  mutate(Date = yearweek(Date)) |>
+  as_tsibble(index = Date, key = City))
+```
+
+# Checking for seasonality
+
+```{r}
+data |>
+  gg_season(AQI, labels = "both")
+```
+
+We see a moderate seasonal pattern that reoccurs every year.
+
+```{r}
+data |>
+  model(STL(AQI ~ trend() +
+              season(window="periodic"),
+        robust = TRUE)) |>
+  components() |>
+  autoplot()
+```
+
+STL decomposition validates our hypothesis.
+
+# Modeling the series
+
+
+## Checking for stationarity
+
+```{r}
+data |>
+  features(AQI, unitroot_nsdiffs)
+
+data |>
+  features(difference(AQI, lag=52), unitroot_ndiffs)
+```
+
+We require one difference operation to make this series stationary.
+
+## Modeling non-seaonal components
+
+```{r}
+data |>
+  gg_tsdisplay(difference(AQI, lag = 52), plot_type = "partial", lag=52)
+```
+
+Observations:
+
+- We see a 52 week seasonal difference
+- The ACF has spikes upto lag 8
+- The PACF has spikes upto lag 3
+
+We can try pdq(3,0,8) + PDQ(1,1,1)52
+
+```{r}
+train <- head(data, nrow(data)-52)
+test <- tail(data, 52)
+
+fit <- train |> model(arima308111 = ARIMA(AQI ~ 1 +pdq(3,0,8) + PDQ(1,1,1)))
+glance(fit)
+
+fit |>
+  forecast(h=52) |>
+  autoplot(train)+
+  geom_line(data = test, aes(x=Date, y=AQI), color = "red", alpha=0.5)
+```
+
