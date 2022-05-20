@@ -1,0 +1,409 @@
+---
+title: "Initial Project Report"
+output: github_document
+---
+
+# Introduction
+
+Recent news coverage of the World Air Quality Report by IQAir (a Swiss organization) showed that 35 Indian cities were in the top 50 of the world’s most polluted cities (The Indian Express, 2022). It has been established and extensively documented that exposure to high amounts of air pollution leads to serious respiratory problems. Records show that in 2019 over 1.6 million deaths were attributed to poor air quality. The cause of death ranged from strokes, diabetes, lung cancer and myocardial infarctions (IQAir, 2022).
+
+Poor air quality has become a cause for concern in recent years where the city of Delhi, India had to enforce stay at home guidelines (Hindustan Times, 2021) and shut down schools (DW, 2021). It is clear that there is a need to develop solutions and take measures to bring air pollution under control, so that people can live their lives without disruption and without the risk of illness.
+
+Models for the series can help identify:
+
+-	seasonal patterns of different frequency in pollution and air quality and serve as a starting point for policymakers to investigate sources of air pollution and how they can be controlled
+-	trends of air quality to check how interventions have impacted air quality in the short and long term
+
+
+```{r, setup, message=FALSE}
+library(fpp3)
+library(astsa)  # for mvspec()
+```
+
+```{r}
+data <- read.csv("data/city_day_raw.csv") |>
+   select(c(City,Date,AQI)) |>
+   mutate(Date = as.Date(Date, format="%Y-%m-%d")) |>
+   filter(City %in% c("Bengaluru", "Chennai", "Delhi", "Hyderabad", "Lucknow"))
+```
+
+# Exploratory Data Analysis
+
+
+## a. Plot the series
+
+```{r}
+ggplot(data = data, aes(x=Date, y=AQI, color=City)) +
+         geom_line()+
+         facet_grid(City ~.)
+```
+
+## b. Series description
+
+Observations:
+
+- Some series have missing values in the start (we will remove them)
+- Some series also have missing values in between - we will impute them with the previous value (downward filling)
+- For the first two years, Hyderabad data has very big outliers compared to the rest of the years (possible that something about the sensors changed)
+- Seasonality
+  - Clear annual seasonal pattern in Delhi and Lucknow - cities in northern India
+  - Not so clear in Chennai, Bengaluru and Hyderabad - cities in southern India
+  - Might be worth looking into some domain knowledge regarding air quality
+
+### Handling missing values
+
+```{r}
+data |>
+  group_by(City) |>
+  summarise(missing.percent = sum(is.na(AQI))/n()*100)
+```
+
+Most of the missing values are likely due to the long runs of NAs in the beginning for each city. We can fill the NAs in between with the previous value and filter out the starting runs of NAs.
+
+First, let us fill "downwards" i.e. only for dates which have data on the previous day. This will fill the previous day's value in the missing field.
+
+```{r}
+data |>
+  group_by(City) |>
+  fill(AQI, .direction = "down") |>
+  summarise(missing.percent = sum(is.na(AQI))/n()*100)
+```
+
+We now see that most of the missing data is only from the long runs of NA in the start. We can safely filter those records out. 
+
+We clean the missing values in the following manner:
+
+- Group data by City
+- Fill missing values downwards
+- Remove remaining missing values at the start
+
+```{r}
+(data <- data |>
+  group_by(City) |>
+  fill(AQI, .direction = "down") |>
+  filter(!is.na(AQI)))
+```
+
+```{r}
+ggplot(data = data, aes(x=Date, y=AQI, color=City)) +
+         geom_line()+
+         facet_grid(City ~.)
+```
+
+## c. Evaluating Stationarity
+
+```{r}
+data <- data |>
+  as_tsibble(index = Date, key = City)
+
+data |>
+  features(AQI, unitroot_ndiffs)
+```
+
+We use the `ndiffs` function to evaluate stationarity. It is clear that each series is non-stationary and would require one differencing operation. We will require to perform this again when we decide to modify the level of our data.
+
+## d. Investigating Seasonality
+
+We use spectral analysis to identify if there are multiple seasonal patterns. Based on our observations we will decide how to roll up the data.
+
+
+```{r}
+delhi.spec <- mvspec(data[data$City == "Delhi", "AQI"], detrend = TRUE, spans = 5)
+lucknow.spec <- mvspec(data[data$City == "Lucknow", "AQI"], detrend = TRUE, spans = 5)
+chennai.spec <- mvspec(data[data$City == "Chennai", "AQI"], detrend = TRUE, spans = 5)
+bengaluru.spec <- mvspec(data[data$City == "Bengaluru", "AQI"], detrend = TRUE, spans = 5)
+hyderabad.spec <- mvspec(data[data$City == "Hyderabad", "AQI"], detrend = TRUE, spans = 5)
+```
+
+Initial plots suggest that Delhi and Lucknow have a single seasonal pattern, probably the strong annual pattern that we saw in the plots. Hyderabad is also suggestive of a single seasonal pattern. We could see a weak pattern in the plots so this should not be surprising.
+
+Bengaluru and Chennai have slightly more complicated plots
+
+Let us observe all peaks. Peak thresholds have been listed for each series as comments based on the spectral plots above
+
+```{r}
+get.spec.df <- function(spec){
+  return(data.frame(spec$details))
+}
+
+delhi.spec <- get.spec.df(delhi.spec)
+bengaluru.spec <- get.spec.df(bengaluru.spec)
+chennai.spec <- get.spec.df(chennai.spec)
+lucknow.spec <- get.spec.df(lucknow.spec)
+hyderabad.spec <- get.spec.df(hyderabad.spec)
+
+# Anything > 400,000 for Delhi
+delhi.spec |> filter(spectrum > 400000) |> arrange(desc(spectrum))
+# Anything > 250,000 for Lucknow
+lucknow.spec |> filter(spectrum > 40000) |> arrange(desc(spectrum))
+# Anything > 15,000 for Chennai
+chennai.spec |> filter(spectrum > 15000) |> arrange(desc(spectrum))
+# Anything > 20,000 for Bengaluru
+bengaluru.spec |> filter(spectrum > 20000) |> arrange(desc(spectrum))
+# Anything > 25,000 for Hyderabad
+hyderabad.spec |> filter(spectrum > 25000) |> arrange(desc(spectrum))
+```
+
+Observations:
+
+- Delhi, Lucknow and Hyderabad appear to have a seasonal pattern that occurs roughly annually (all 3 have peaks around 340 - 400 days)
+- Bengaluru and Chennai exhibit relatively much weaker seasonal behavior but this seasonal pattern also appears to occur annually.
+
+Given the above observations, we can model the seasonality as annual. For ARIMA modeling, we should roll up our data to a monthly level and model the seasonal period as 12.
+
+```{r}
+data <- data |>
+  as_tibble() |>
+  mutate(Date = yearmonth(Date)) |>
+  group_by(City, Date) |>
+  summarise(AQI = mean(AQI)) |>
+  as_tsibble(index = Date, key = City)
+
+write.csv(x = data |> as_tibble(), file = "data/city_month_cleaned.csv")
+```
+
+Plotting rolled up data:
+
+```{r}
+data |> autoplot(AQI) + facet_grid(City ~ .)
+```
+
+
+Re-analyzing seasonal pattern on rolled up data
+
+```{r}
+delhi.spec <- mvspec(data[data$City == "Delhi", "AQI"], detrend = TRUE, spans = 2)
+lucknow.spec <- mvspec(data[data$City == "Lucknow", "AQI"], detrend = TRUE, spans = 2)
+chennai.spec <- mvspec(data[data$City == "Chennai", "AQI"], detrend = TRUE, spans = 2)
+bengaluru.spec <- mvspec(data[data$City == "Bengaluru", "AQI"], detrend = TRUE, spans = 2)
+hyderabad.spec <- mvspec(data[data$City == "Hyderabad", "AQI"], detrend = TRUE, spans = 2)
+```
+```{r}
+delhi.spec <- get.spec.df(delhi.spec)
+bengaluru.spec <- get.spec.df(bengaluru.spec)
+chennai.spec <- get.spec.df(chennai.spec)
+lucknow.spec <- get.spec.df(lucknow.spec)
+hyderabad.spec <- get.spec.df(hyderabad.spec)
+
+head(delhi.spec |> arrange(desc(spectrum)))
+head(lucknow.spec |> arrange(desc(spectrum)))
+head(chennai.spec |> arrange(desc(spectrum)))
+head(bengaluru.spec |> arrange(desc(spectrum)))
+head(hyderabad.spec |> arrange(desc(spectrum)))
+```
+
+Our hypothesis seems to be correct. We see a clear 12 month seasonal pattern in all cities except Chennai. We also see a smaller pattern in all series other than Chennai, but those peaks are much smaller than the 12 month peaks. For now we choose not to include them in our seasonal pattern.
+
+The 72 month pattern for Chennai does not make sense as the data itself covers 5 years. Chennai does seem to exhibit seasonal patterns of 9, 10.28, 12 and 18 months. Contrary to other cities, the seasonal pattern does not have one clear influence. It is worth noting that Chennai is the only coastal city out of all the cities in the data. Perhaps this influences the seasonality of AQI? More investigation and comparison of other coastal cities (specifically on India's east coast) would be required to make a clear conclusion.
+
+## e. ACF and PACF
+
+```{r}
+# Re-evaluating stationarity
+
+data |> features(AQI, unitroot_kpss)
+data |> features(AQI, unitroot_ndiffs)
+data |> features(AQI, unitroot_nsdiffs)
+```
+
+We see that Delhi and Lucknow require a seasonal difference and the others require a non-seasonal difference.
+
+```{r}
+data |> 
+  filter(City %in% c("Delhi", "Lucknow"))  |>
+  features(difference(AQI, lag = 12), unitroot_ndiffs)
+```
+Lucknow also requires a non-seasonal difference after a seasonal difference.
+
+```{r, message=FALSE}
+data |> filter(City == "Delhi") |> gg_tsdisplay(difference(AQI, lag = 12),
+                                                plot_type = "partial")
+data |> filter(City == "Lucknow") |> gg_tsdisplay(difference(
+                                                        difference(AQI, lag=12),
+                                                        lag = 1),
+                                                  plot_type = "partial")
+data |> filter(City == "Chennai") |> gg_tsdisplay(difference(AQI),
+                                                  plot_type = "partial")
+data |> filter(City == "Bengaluru") |> gg_tsdisplay(difference(AQI),
+                                                    plot_type = "partial")
+data |> filter(City == "Hyderabad") |> gg_tsdisplay(difference(AQI),
+                                                    plot_type = "partial")
+```
+
+Candidate models:
+
+- Delhi: pdq(1,0,1)+PDQ(1,1,1)[12]
+  - Clear AR and MA spike at 1, seasonal AR and MA spike at 12
+- Lucknow: pdq(1,1,1)+PDQ(1,1,1)[12]
+  - Clear AR and MA spike at 1, seasonal AR and MA spike at 12
+- Chennai: pdq(0,1,0)+PDQ(0,0,0)[12]
+  - No significant spikes whatsoever
+- Bengaluru: pdq(0,1,0)+PDQ(0,0,1)[12]
+  - Seasonal MA spike at 12 in ACF
+- Hyderabad: pdq(0,1,0)+PDQ(0,0,0)[12]
+  - No significant spikes whatsoever
+  - We will iterate with a seasonal term since we saw a weak seasonal pattern
+  
+# ARIMA Modeling
+
+Splitting data into train and test
+
+```{r}
+train <- data |> filter(Date < yearmonth("2019 Jun"))
+test <- data |> filter(Date >= yearmonth("2019 Jun"))
+```
+
+We now build the candidate models and and display their fit metrics and residuals. It is clear from the plots below that all the series are white noise.
+
+## Delhi: pdq(1,0,1)+PDQ(1,1,1)[12]
+
+```{r}
+delhi.fit <- train |>
+  filter(City == "Delhi") |>
+  model(arima = ARIMA(AQI ~ pdq(1,0,1) + PDQ(1,1,1)))
+
+glance(delhi.fit)
+report(delhi.fit)
+
+delhi.fit |> gg_tsresiduals(lag = 12)
+```
+
+## Lucknow: pdq(1,1,1)+PDQ(1,1,1)[12]
+
+```{r}
+lucknow.fit <- train |>
+  filter(City == "Lucknow") |>
+  model(arima = ARIMA(AQI ~ pdq(1,1,1) + PDQ(1,1,1)))
+
+glance(lucknow.fit)
+report(lucknow.fit)
+
+lucknow.fit |> gg_tsresiduals(lag = 12)
+```
+
+## Chennai: pdq(0,1,0)+PDQ(0,0,0)[12]
+
+```{r}
+chennai.fit <- train |>
+  filter(City == "Chennai") |>
+  model(arima = ARIMA(AQI ~ pdq(0,1,0) + PDQ(0,0,0)))
+
+glance(chennai.fit)
+report(chennai.fit)
+
+chennai.fit |> gg_tsresiduals(lag=12)
+```
+
+## Bengaluru: pdq(0,1,0)+PDQ(0,0,1)[12]
+
+```{r}
+bengaluru.fit <- train |>
+  filter(City == "Bengaluru") |>
+  model(arima = ARIMA(AQI ~ pdq(0,1,0) + PDQ(0,0,1)))
+
+glance(bengaluru.fit)
+report(bengaluru.fit)
+
+bengaluru.fit |> gg_tsresiduals(lag = 12)
+```
+
+## Hyderabad: pdq(0,1,0)+PDQ(0,0,0)[12]
+
+```{r}
+hyderabad.fit <- train |>
+  filter(City == "Hyderabad") |>
+  model(arima = ARIMA(AQI ~ pdq(0,1,0) + PDQ(0,0,0)))
+
+glance(hyderabad.fit)
+report(hyderabad.fit)
+
+hyderabad.fit |> gg_tsresiduals(lag=12)
+```
+
+Let us add a seasonal term in Hyderabad model since we saw that the series did exhibit weak seasonality. We compare models with 1 AR term only, 1 MA term only and 1 AR and MA term. Since we are including a seasonal term we use a seasonal difference on this model.
+```{r}
+#MA term only
+report(train |>
+  filter(City == "Hyderabad") |>
+  model(arima = ARIMA(AQI ~ pdq(0,0,0) + PDQ(0,1,1))))
+
+#AR term only
+report(train |>
+  filter(City == "Hyderabad") |>
+  model(arima = ARIMA(AQI ~ pdq(0,0,0) + PDQ(1,1,0))))
+
+#AR and MA term
+report(train |>
+  filter(City == "Hyderabad") |>
+  model(arima = ARIMA(AQI ~ pdq(0,0,0) + PDQ(1,1,1))))
+```
+
+We see that the seasonal terms considerably improved the AICc of the model. The model with only the seasonal MA term appears to be the best option given its lowest AICc value and being a simpler model. However, the seasonal MA term may not be significant given it is smaller than 2 \times S.E. The seasonal AR model does not seem to suffer from this
+
+Let us check the residuals
+
+```{r}
+gg_tsresiduals(train |>
+  filter(City == "Hyderabad") |>
+  model(arima = ARIMA(AQI ~ pdq(0,0,0) + PDQ(1,1,0))), lag=12)
+```
+
+We see that there are some significant spikes in the residual ACF, spike 1 is more prominent. Perhaps we can apply a non-seasonal difference as well.
+
+```{r}
+
+hyderabad.fit.seas <- train |>
+  filter(City == "Hyderabad") |>
+  model(arima = ARIMA(AQI ~ pdq(0,1,0) + PDQ(1,1,0)))
+
+report(hyderabad.fit.seas)
+
+gg_tsresiduals(hyderabad.fit.seas, lag=12)
+```
+
+This model still sees a spike at lag 2. We could compare the forecasts of the seasonal and non-seasonal models for this city to see which one does better.
+
+## Using Automatic model Selection
+
+```{r}
+fit <- train |> model(ARIMA(AQI, stepwise = FALSE))
+fit |>
+  pivot_longer(cols = -City, names_to = "Model name", values_to = "Model") |>
+  mutate(model.details = format(Model))
+
+glance(fit)
+```
+
+Note that automatic selection did not pick a seasonal model for Hyderabad.
+
+# Additonal Analysis
+
+We compare forecasts for Hyderabad using a seasonal and non-seasonal model
+
+## Hyderabad Non-seasonal model forecast
+
+```{r}
+hyderabad.fit |> forecast(new_data = test) |>
+  autoplot(train)+
+  geom_line(data = test |> filter(City == "Hyderabad"), aes(x=Date, y=AQI), color = "red", linetype = "longdash", alpha=0.7)
+
+hyderabad.fit |> forecast(new_data = test) |> accuracy(test)
+```
+
+```{r}
+hyderabad.fit.seas |> forecast(new_data = test) |>
+  autoplot(train)+
+  geom_line(data = test |> filter(City == "Hyderabad"), aes(x=Date, y=AQI), color = "red", linetype = "longdash", alpha=0.7)
+
+hyderabad.fit.seas |> forecast(new_data = test) |> accuracy(test)
+```
+
+We see that the seasonal model does a much better job of forecasting the AQI than the non-seasonal model. We must note that the the forecasts are off by a lot potentially because the test data is from the year 2020. We could try techniques other than ARIMA and compare their performance.
+
+# Summary and Implications
+
+We see that the series for Chennai was not suitably modeled by ARIMA. With no AR and MA terms it will be a flat line segment. We would expect the ARIMA models to work well with cities with well defined seasonal behavior such as Lucknow and Delhi, and even relatively less defined seasonal behavior for cities like Bengaluru and Hyderabad.
+
+This analysis has shown us the importance of modeling seasonality. If we were to choose the automatic search model for Hyderabad or just use the ACF and PACF to decide which model to pick, we would have been left worse off with a model that would not be very reliable or helpful. The seasonality analysis helped us make a better model choice.
+
+Lastly, given that the test data is from the year 2020, we should expect most models to perform poorly on this data. India had some of the most stringent lock down measures in place and the level of pollution dropped drastically in the early months of 2020 since economic activity mostly came to a standstill.
