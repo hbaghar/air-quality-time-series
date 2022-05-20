@@ -1,0 +1,143 @@
+---
+title: "Modeling and Forecasting - Delhi Weekly Data"
+output: github_document
+---
+
+```{r, setup, message=FALSE}
+library(fpp3)
+```
+
+# Load data
+
+```{r}
+(data <- read.csv("data/delhi_weekly.csv") |>
+  mutate(Date = yearweek(Date)) |>
+  as_tsibble(index = Date, key = City))
+```
+
+The series consists of average weekly average AQI data for the city of Delhi from the years 2015-2020.
+
+# Checking for seasonality
+
+## Using a seasonal plot
+
+```{r}
+data |>
+  gg_season(AQI, labels = "both")
+```
+
+We see a moderate seasonal pattern that recurs every year.
+
+## Using STL decomposition
+
+```{r}
+data |>
+  model(STL(AQI ~ trend() +
+              season(window="periodic"),
+        robust = TRUE)) |>
+  components() |>
+  autoplot()
+```
+
+STL decomposition validates our hypothesis.
+
+# Modeling the series
+
+## Checking for stationarity
+
+```{r}
+data |>
+  features(AQI, unitroot_nsdiffs)
+
+data |>
+  features(difference(AQI, lag=52), unitroot_ndiffs)
+```
+
+We require one seasonal difference operation to make this series stationary.
+
+## Creating Training and Test Set
+
+```{r}
+train <- head(data, nrow(data)-52)
+test <- tail(data, 52)
+```
+
+## Identifying suitable ARIMA model
+
+```{r}
+train |>
+  gg_tsdisplay(difference(AQI, lag = 52), plot_type = "partial", lag=52)
+```
+
+Observations:
+
+- Both ACF and PACF have a seasonal spike at week 52, however the PACF spike is weak
+- The ACF has spikes up to lag 8
+- The PACF has spikes up to lag 3
+
+Let us try pdq(3,0,0) + PDQ(1,1,1)[52] for starters. We choose not to include MA8 for simplicity and because AR and MA terms are related to each other.
+
+## Fitting chosen ARIMA model to training data
+
+```{r}
+fit <- train |> model(arima300111 = ARIMA(AQI ~ 1 + pdq(3,0,0) + PDQ(1,1,1)))
+glance(fit)
+report(fit)
+```
+
+### Checking model residuals
+
+```{r}
+fit |> gg_tsresiduals(lag = 52)
+```
+
+The ACF appears to have some significant spikes but these could be due to type 1 error.
+
+Let us perform the Ljung-box test to analyze the residuals:
+
+```{r}
+augment(fit) |>
+  features(.resid, ljung_box, lag=52)
+```
+The p-value > 0.05 means we fail to reject the null hypothesis, the series is not auto-correlated.
+
+### Finding best model using automatic search
+
+```{r}
+fit2 <- train |> model(search = ARIMA(AQI))
+glance(fit2)
+report(fit2)
+```
+
+Our model has better AICc than the automated search model!
+
+# Generating forecasts for the model
+
+```{r}
+test |> 
+  rename(AQI.true = AQI) |>
+  bind_cols(fit |> 
+              forecast(new_data = test) |>
+              as_tibble() |>
+              select(.mean)) |>
+  rename(AQI.forecast = .mean)
+```
+
+## Visualizing forecasts along with train and test set
+
+```{r}
+fit |>
+  forecast(new_data = test) |>
+  autoplot(train)+
+  geom_line(data = test, aes(x=Date, y=AQI), color = "red", linetype = "longdash", alpha=0.7)
+```
+
+In the above plot, forecasts are blue, test data is red, and training data is black.
+
+We see that the forecasts are overestimated for points beyond 2020. This discrepancy can be attributed to the strict lock down measures that were imposed to curb the spread of COVID-19 in India. Keeping this in mind, the error in our forecasts is not surprising.
+
+## Error metrics on Test set
+
+```{r}
+fit |> forecast(h=52) |> accuracy(test)
+```
