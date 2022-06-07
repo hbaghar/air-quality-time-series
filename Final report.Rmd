@@ -3,8 +3,8 @@ title: "DATA 598: Final Project Report"
 date: "June 8, 2022"
 author: "Hriday Baghar"
 output:
-  pdf_document: default
   github_document: default
+  pdf_document: default
 ---
 
 # Introduction
