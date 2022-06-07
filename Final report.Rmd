@@ -1,6 +1,10 @@
 ---
-title: "Initial Project Report"
-output: github_document
+title: "DATA 598: Final Project Report"
+date: "June 8, 2022"
+author: "Hriday Baghar"
+output:
+  pdf_document: default
+  github_document: default
 ---
 
 # Introduction
@@ -338,7 +342,7 @@ report(train |>
   model(arima = ARIMA(AQI ~ pdq(0,0,0) + PDQ(1,1,1))))
 ```
 
-We see that the seasonal terms considerably improved the AICc of the model. The model with only the seasonal MA term appears to be the best option given its lowest AICc value and being a simpler model. However, the seasonal MA term may not be significant given it is smaller than 2 \times S.E. The seasonal AR model does not seem to suffer from this
+We see that the seasonal terms considerably improved the AICc of the model. The model with only the seasonal MA term appears to be the best option given its lowest AICc value and being a simpler model. However, the seasonal MA term may not be significant given it is smaller than 2 $\times$ S.E. The seasonal AR model does not seem to suffer from this
 
 Let us check the residuals
 
@@ -385,7 +389,8 @@ We compare forecasts for Hyderabad using a seasonal and non-seasonal model
 ```{r}
 hyderabad.fit |> forecast(new_data = test) |>
   autoplot(train)+
-  geom_line(data = test |> filter(City == "Hyderabad"), aes(x=Date, y=AQI), color = "red", linetype = "longdash", alpha=0.7)
+  geom_line(data = test |> filter(City == "Hyderabad"), aes(x=Date, y=AQI), 
+            color = "red", linetype = "longdash", alpha=0.7)
 
 hyderabad.fit |> forecast(new_data = test) |> accuracy(test)
 ```
@@ -393,17 +398,76 @@ hyderabad.fit |> forecast(new_data = test) |> accuracy(test)
 ```{r}
 hyderabad.fit.seas |> forecast(new_data = test) |>
   autoplot(train)+
-  geom_line(data = test |> filter(City == "Hyderabad"), aes(x=Date, y=AQI), color = "red", linetype = "longdash", alpha=0.7)
+  geom_line(data = test |> filter(City == "Hyderabad"), aes(x=Date, y=AQI), 
+            color = "red", linetype = "longdash", alpha=0.7)
 
 hyderabad.fit.seas |> forecast(new_data = test) |> accuracy(test)
 ```
 
 We see that the seasonal model does a much better job of forecasting the AQI than the non-seasonal model. We must note that the the forecasts are off by a lot potentially because the test data is from the year 2020. We could try techniques other than ARIMA and compare their performance.
 
+## Forecasting the Remaining Series
+
+We now conduct forecasts for the remaining cities and check model performance.
+
+### Delhi
+
+```{r}
+delhi.fit |> forecast(new_data = test) |>
+   autoplot(train)+
+   geom_line(data = test |> filter(City == "Delhi"), aes(x=Date, y=AQI), 
+            color = "red", linetype = "longdash", alpha=0.7)
+
+delhi.fit |> forecast(new_data = test) |> accuracy(test)
+```
+
+### Lucknow
+
+```{r}
+lucknow.fit |> forecast(new_data = test) |>
+   autoplot(train)+
+   geom_line(data = test |> filter(City == "Lucknow"), aes(x=Date, y=AQI), 
+            color = "red", linetype = "longdash", alpha=0.7)
+
+lucknow.fit |> forecast(new_data = test) |> accuracy(test)
+```
+
+### Bengaluru
+
+```{r}
+bengaluru.fit |> forecast(new_data = test) |>
+   autoplot(train)+
+   geom_line(data = test |> filter(City == "Bengaluru"), aes(x=Date, y=AQI), 
+            color = "red", linetype = "longdash", alpha=0.7)
+
+bengaluru.fit |> forecast(new_data = test) |> accuracy(test)
+```
+
+### Chennai
+
+```{r}
+chennai.fit |> forecast(new_data = test) |>
+   autoplot(train)+
+   geom_line(data = test |> filter(City == "Chennai"), aes(x=Date, y=AQI), 
+            color = "red", linetype = "longdash", alpha=0.7)
+
+chennai.fit |> forecast(new_data = test) |> accuracy(test)
+```
+
 # Summary and Implications
 
 We see that the series for Chennai was not suitably modeled by ARIMA. With no AR and MA terms it will be a flat line segment. We would expect the ARIMA models to work well with cities with well defined seasonal behavior such as Lucknow and Delhi, and even relatively less defined seasonal behavior for cities like Bengaluru and Hyderabad.
 
+The forecasts show us that this is indeed true. Lucknow and Delhi have the best model performance as measured by accuracy metrics and the seasonal model is able to adequately able to capture the seasonality of the AQI (although the accuracy is not extremely high. 
+
+We see that the Bengaluru model performs poorly even though the seasonal pattern is captured by the model. We discuss the accuracy later in this section. Chennai's model has the highest accuracy but that is because the variation in AQI is not very high to begin with.
+
 This analysis has shown us the importance of modeling seasonality. If we were to choose the automatic search model for Hyderabad or just use the ACF and PACF to decide which model to pick, we would have been left worse off with a model that would not be very reliable or helpful. The seasonality analysis helped us make a better model choice.
 
-Lastly, given that the test data is from the year 2020, we should expect most models to perform poorly on this data. India had some of the most stringent lock down measures in place and the level of pollution dropped drastically in the early months of 2020 since economic activity mostly came to a standstill.
+Lastly, given that the test data is from the year 2020, we should expect most models to perform poorly on this data. We see that this is true for all the series that we have forecasted. We can see that all the forecasts for the year 2020 are much higher than the true values in the test data. 
+
+India had some of the most stringent lock down measures in place and the level of pollution dropped drastically in the early months of 2020 since economic activity mostly came to a standstill. Given that underlying data generating processes were dramatically altered, we must expect the performance of any forecasting model to be sub-optimal.
+
+For next steps, we must test other forecasting techniques on this data. We could use machine learning based models, ETS or other techniques and check if they are able to improve accuracy. Another attempt to forecast could incorporate weather data - air quality is highly dependent on weather data. We could add other predictors with weather data to check if this helps improve model performance.
+
+Given the forecasting accuracy and that the data is for the year 2020, these models would be useful if we had more years of data so that we could make longer forecasts and test long term accuracy of these models.
